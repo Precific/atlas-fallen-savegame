@@ -1,6 +1,6 @@
 # Atlas Fallen savegame utility&stuff
 
-# This Adds New GUI/Json Editor
+# New GUI/Json Editor
 
 Full .sav File loading Support including Json Editor GUI and Export Functionality Right from the Editor - no need for manual Export/Edit/Import no more !
 
