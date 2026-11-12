@@ -1,0 +1,1 @@
+pyinstaller --noconsole --onefile --add-data "savegame_body.py;." --add-data "name32table_hash.py;." --add-data "format-docs.md;." atlas_gui.py

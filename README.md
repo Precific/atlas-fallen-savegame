@@ -1,5 +1,9 @@
 # Atlas Fallen savegame utility&stuff
 
+# New GUI/Json Editor
+
+Full .sav File loading Support including Json Editor GUI and Export Functionality Right from the Editor - no need for manual Export/Edit/Import no more !
+
 Supports the release build of Atlas Fallen (2023-08-12). 
 
 ## Savegame extract/modify utility
