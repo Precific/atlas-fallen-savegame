@@ -81,7 +81,7 @@ class AtlasToolGUI:
         
         self.loaded_sav_path = None
         self._highlight_job = None
-        self._raw_search_job = None # Debounce timer for raw search
+        self._raw_search_job = None
         self.tree_item_map = {}
         self.root_json_data = {}
         self.raw_match_indices = []
@@ -183,7 +183,7 @@ class AtlasToolGUI:
         raw_search_bar = ttk.Frame(self.raw_editor_frame)
         raw_search_bar.grid(row=0, column=0, sticky='ew', pady=(0, 6))
 
-        ttk.Label(raw_search_bar, text="🔍 Find in Raw JSON:", font=('Segoe UI', 9, 'bold')).pack(side='left', padx=(0, 6))
+        ttk.Label(raw_search_bar, text="🔍 Find in Raw JSON (min 2 chars):", font=('Segoe UI', 9, 'bold')).pack(side='left', padx=(0, 6))
         self.raw_search_var = tk.StringVar()
         self.raw_search_var.trace("w", lambda *args: self.schedule_raw_search())
         ent_raw_search = ttk.Entry(raw_search_bar, textvariable=self.raw_search_var, width=30, font=('Consolas', 10))
@@ -287,30 +287,67 @@ class AtlasToolGUI:
         self.raw_editor_frame.tkraise()
 
     def schedule_raw_search(self):
-        """Debounces the raw JSON search to prevent UI freezing on every keystroke."""
+        """Debounces and safeguards raw JSON search so typing is lightning-fast and non-blocking."""
         if self._raw_search_job:
             self.root.after_cancel(self._raw_search_job)
         self._raw_search_job = self.root.after(300, self.perform_raw_search)
 
     def perform_raw_search(self):
         query = self.raw_search_var.get().strip()
-        self.json_text.tag_remove("search_match", "1.0", tk.END)
-        self.json_text.tag_remove("search_current", "1.0", tk.END)
-        self.raw_match_indices = []
-
-        if not query:
-            self.lbl_raw_match_count.config(text="0 results")
+        
+        if len(query) < 2:
+            self.json_text.tag_remove("search_match", "1.0", tk.END)
+            self.json_text.tag_remove("search_current", "1.0", tk.END)
+            self.raw_match_indices = []
+            if len(query) == 1:
+                self.lbl_raw_match_count.config(text="Type at least 2 chars...")
+            else:
+                self.lbl_raw_match_count.config(text="0 results")
             return
 
-        start = "1.0"
-        while True:
-            pos = self.json_text.search(query, start, tk.END, nocase=True)
-            if not pos:
-                break
-            end = f"{pos}+{len(query)}c"
-            self.json_text.tag_add("search_match", pos, end)
-            self.raw_match_indices.append((pos, end))
-            start = end
+        self.lbl_raw_match_count.config(text="Searching...")
+
+        # Run lightning-fast string lookup in background thread using pure Python index math
+        def background_search():
+            text_content = self.json_text.get("1.0", tk.END)
+            lower_content = text_content.lower()
+            lower_query = query.lower()
+            
+            # Pre-calculate line offsets for O(1) coordinate conversion without calling Tkinter widget methods
+            line_offsets = [0]
+            curr = 0
+            for line in text_content.splitlines(keepends=True):
+                curr += len(line)
+                line_offsets.append(curr)
+
+            def get_tk_index(char_pos):
+                # Binary search or fast linear scan to find line number from character offset
+                import bisect
+                line_idx = bisect.bisect_right(line_offsets, char_pos) - 1
+                line_idx = max(0, min(line_idx, len(line_offsets) - 2))
+                col_idx = char_pos - line_offsets[line_idx]
+                return f"{line_idx + 1}.{col_idx}"
+
+            matches = []
+            idx = 0
+            while True:
+                idx = lower_content.find(lower_query, idx)
+                if idx == -1:
+                    break
+                
+                pos = get_tk_index(idx)
+                end = get_tk_index(idx + len(query))
+                matches.append((pos, end))
+                idx += len(query)
+
+            self.root.after(0, lambda: self.apply_raw_search_results(matches))
+
+        threading.Thread(target=background_search, daemon=True).start()
+
+    def apply_raw_search_results(self, matches):
+        self.json_text.tag_remove("search_match", "1.0", tk.END)
+        self.json_text.tag_remove("search_current", "1.0", tk.END)
+        self.raw_match_indices = matches
 
         count = len(self.raw_match_indices)
         if count > 0:
@@ -320,12 +357,22 @@ class AtlasToolGUI:
             self.lbl_raw_match_count.config(text="0 results")
 
     def highlight_current_raw_match(self):
+        self.json_text.tag_remove("search_match", "1.0", tk.END)
         self.json_text.tag_remove("search_current", "1.0", tk.END)
+        
         if self.raw_match_indices:
+            # Highlight a window of matches around the current index for smooth visual context
+            start_win = max(0, self.raw_current_match_idx - 30)
+            end_win = min(len(self.raw_match_indices), self.raw_current_match_idx + 30)
+            for i in range(start_win, end_win):
+                p, e = self.raw_match_indices[i]
+                self.json_text.tag_add("search_match", p, e)
+
+            # Highlight exact active match and scroll to it
             pos, end = self.raw_match_indices[self.raw_current_match_idx]
             self.json_text.tag_add("search_current", pos, end)
             self.json_text.see(pos)
-            self.lbl_raw_match_count.config(text=f"{self.raw_current_match_idx + 1} of {len(self.raw_match_indices)} results")
+            self.lbl_raw_match_count.config(text=f"{self.raw_current_match_idx + 1} of {len(self.raw_match_indices):,} results")
 
     def raw_find_next(self):
         if self.raw_match_indices:
