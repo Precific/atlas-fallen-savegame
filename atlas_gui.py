@@ -3,12 +3,18 @@ from tkinter import ttk, filedialog, messagebox, colorchooser
 import subprocess
 import threading
 import os
+import sys
 import tempfile
 import json
 import re
+import bisect
 
-# Get the directory where atlas_gui.py is actually located
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Determine base directory whether running as script or compiled PyInstaller single .exe
+if getattr(sys, 'frozen', False):
+    BASE_DIR = sys._MEIPASS
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 SAVEGAME_SCRIPT = os.path.join(BASE_DIR, "savegame_body.py")
 HASH_SCRIPT = os.path.join(BASE_DIR, "name32table_hash.py")
 
@@ -16,8 +22,8 @@ class AtlasToolGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Atlas Fallen Save Game & Hash Utility GUI")
-        self.root.geometry("1100x800")
-        self.root.minsize(900, 700)
+        self.root.geometry("1100x820")
+        self.root.minsize(950, 720)
 
         # Style configuration (Modern Dark Theme with vibrant accents)
         self.style = ttk.Style()
@@ -56,14 +62,17 @@ class AtlasToolGUI:
         self.tab_savegame = ttk.Frame(self.notebook)
         self.tab_editor = ttk.Frame(self.notebook)
         self.tab_hash = ttk.Frame(self.notebook)
+        self.tab_docs = ttk.Frame(self.notebook)
         
         self.notebook.add(self.tab_savegame, text=" 🛡️ Converter / CLI Wrapper ")
         self.notebook.add(self.tab_editor, text=" 📝 SaveGame JSON Editor ")
         self.notebook.add(self.tab_hash, text=" 🔍 Name32 Hash Tool ")
+        self.notebook.add(self.tab_docs, text=" 📖 Format Specs ")
 
         self.create_savegame_tab()
         self.create_editor_tab()
         self.create_hash_tab()
+        self.create_docs_tab()
 
         # Bottom Console / Log Output Frame
         console_frame = ttk.Frame(root)
@@ -86,7 +95,7 @@ class AtlasToolGUI:
         self.root_json_data = {}
         self.raw_match_indices = []
         self.raw_current_match_idx = 0
-        self.log(f"[Init] Script base directory: {BASE_DIR}")
+        self.log(f"[Init] Base directory resolved to: {BASE_DIR}")
 
     def log(self, message):
         self.log_text.insert(tk.END, message + "\n")
@@ -286,6 +295,74 @@ class AtlasToolGUI:
 
         self.raw_editor_frame.tkraise()
 
+    def create_docs_tab(self):
+        docs_frame = ttk.Frame(self.tab_docs, padding=10)
+        docs_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        docs_frame.rowconfigure(1, weight=1)
+        docs_frame.columnconfigure(0, weight=1)
+
+        header_lbl = ttk.Label(docs_frame, text="📜 Atlas Fallen Save File Architecture & Specifications", font=('Segoe UI', 11, 'bold'), foreground="#ff7b00")
+        header_lbl.grid(row=0, column=0, sticky='w', pady=(0, 8))
+
+        text_container = ttk.Frame(docs_frame)
+        text_container.grid(row=1, column=0, sticky='nsew')
+        text_container.rowconfigure(0, weight=1)
+        text_container.columnconfigure(0, weight=1)
+
+        self.docs_text = tk.Text(text_container, bg="#12121a", fg="#d4d4d4", insertbackground="white", font=("Consolas", 10), wrap="word", relief="flat", padx=10, pady=10)
+        docs_y_scroll = ttk.Scrollbar(text_container, orient="vertical", command=self.docs_text.yview)
+        
+        self.docs_text.configure(yscrollcommand=docs_y_scroll.set)
+        self.docs_text.grid(row=0, column=0, sticky='nsew')
+        docs_y_scroll.grid(row=0, column=1, sticky='ns')
+
+        # Configure Syntax Highlight Tags for Docs
+        self.docs_text.tag_configure("doc_h1", foreground="#ff7b00", font=("Consolas", 12, "bold"))
+        self.docs_text.tag_configure("doc_h2", foreground="#4ec9b0", font=("Consolas", 11, "bold"))
+        self.docs_text.tag_configure("doc_h3", foreground="#9cdcfe", font=("Consolas", 10, "bold"))
+        self.docs_text.tag_configure("doc_code", foreground="#ce9178", background="#2a2a40")
+        self.docs_text.tag_configure("doc_keyword", foreground="#569cd6", font=("Consolas", 10, "bold"))
+
+        # Load format-docs.md content dynamically
+        docs_path = os.path.join(BASE_DIR, "format-docs.md")
+        if os.path.exists(docs_path):
+            try:
+                with open(docs_path, 'r', encoding='utf-8') as f:
+                    docs_content = f.read()
+                self.docs_text.insert("1.0", docs_content)
+                self.apply_docs_syntax_highlighting()
+            except Exception as e:
+                self.docs_text.insert("1.0", f"Error loading documentation file:\n{str(e)}")
+        else:
+            self.docs_text.insert("1.0", "[format-docs.md not found in bundle paths]")
+
+        self.docs_text.configure(state="disabled") # Make read-only viewer
+
+    def apply_docs_syntax_highlighting(self):
+        content = self.docs_text.get("1.0", tk.END)
+        
+        # Regex patterns for Markdown documentation elements
+        h1_regex = re.compile(r'^#\s+.*$', re.MULTILINE)
+        h2_regex = re.compile(r'^##\s+.*$', re.MULTILINE)
+        h3_regex = re.compile(r'^###\s+.*$', re.MULTILINE)
+        code_regex = re.compile(r'`([^`]+)`')
+        keyword_regex = re.compile(r'\b(uint32_t|int32_t|uint64_t|uint8_t|int8_t|uint16_t|bool|string|binary|vec3|Variant|Name32|Ref|Curve|Rect|Color|Degree|Radian|Rotate|quat|UDim|UVector2)\b')
+
+        for match in h1_regex.finditer(content):
+            self.docs_text.tag_add("doc_h1", f"1.0 + {match.start()} chars", f"1.0 + {match.end()} chars")
+
+        for match in h2_regex.finditer(content):
+            self.docs_text.tag_add("doc_h2", f"1.0 + {match.start()} chars", f"1.0 + {match.end()} chars")
+
+        for match in h3_regex.finditer(content):
+            self.docs_text.tag_add("doc_h3", f"1.0 + {match.start()} chars", f"1.0 + {match.end()} chars")
+
+        for match in code_regex.finditer(content):
+            self.docs_text.tag_add("doc_code", f"1.0 + {match.start()} chars", f"1.0 + {match.end()} chars")
+
+        for match in keyword_regex.finditer(content):
+            self.docs_text.tag_add("doc_keyword", f"1.0 + {match.start()} chars", f"1.0 + {match.end()} chars")
+
     def schedule_raw_search(self):
         """Debounces and safeguards raw JSON search so typing is lightning-fast and non-blocking."""
         if self._raw_search_job:
@@ -321,8 +398,6 @@ class AtlasToolGUI:
                 line_offsets.append(curr)
 
             def get_tk_index(char_pos):
-                # Binary search or fast linear scan to find line number from character offset
-                import bisect
                 line_idx = bisect.bisect_right(line_offsets, char_pos) - 1
                 line_idx = max(0, min(line_idx, len(line_offsets) - 2))
                 col_idx = char_pos - line_offsets[line_idx]
@@ -726,7 +801,7 @@ class AtlasToolGUI:
             messagebox.showerror("Error", f"savegame_body.py not found at:\n{SAVEGAME_SCRIPT}")
             return
 
-        cmd = ["python", SAVEGAME_SCRIPT, mode, infile, outfile]
+        cmd = [sys.executable, SAVEGAME_SCRIPT, mode, infile, outfile]
 
         if "extract" in mode:
             if self.chk_skip_era.get():
@@ -759,7 +834,7 @@ class AtlasToolGUI:
                 fd, temp_json_path = tempfile.mkstemp(suffix=".json")
                 os.close(fd)
 
-                cmd = ["python", SAVEGAME_SCRIPT, "extract_json", filename, temp_json_path]
+                cmd = [sys.executable, SAVEGAME_SCRIPT, "extract_json", filename, temp_json_path]
                 process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 stdout, stderr = process.communicate()
 
@@ -829,7 +904,7 @@ class AtlasToolGUI:
                 with open(temp_json_path, 'w', encoding='utf8') as f:
                     json.dump(parsed_json, f, indent=4)
 
-                cmd = ["python", SAVEGAME_SCRIPT, "compose_json", self.loaded_sav_path, temp_json_path, out_filename, "--compress"]
+                cmd = [sys.executable, SAVEGAME_SCRIPT, "compose_json", self.loaded_sav_path, temp_json_path, out_filename, "--compress"]
                 process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 stdout, stderr = process.communicate()
 
@@ -868,10 +943,10 @@ class AtlasToolGUI:
         
         def run_hash():
             try:
-                with open(binfile, 'rb') as f_in, open(os.path.join(BASE_DIR, 'name32 table.bin'), 'wb') as f_out:
+                with open(binfile, 'rb') as f_in, open(os.path.join(os.path.dirname(HASH_SCRIPT), 'name32 table.bin'), 'wb') as f_out:
                     f_out.write(f_in.read())
                 
-                process = subprocess.Popen(["python", HASH_SCRIPT], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                process = subprocess.Popen([sys.executable, HASH_SCRIPT], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 stdout, stderr = process.communicate()
                 
                 if stdout:
